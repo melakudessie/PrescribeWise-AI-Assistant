@@ -2,6 +2,7 @@ import os
 import re
 import io
 from typing import List, Dict, Tuple, Optional
+from datetime import datetime, date, timedelta
 
 import streamlit as st
 import numpy as np
@@ -26,12 +27,15 @@ DEFAULT_PDF_PATH: str = "WHOAMR.pdf"
 EMBED_MODEL: str = "text-embedding-3-small"
 CHAT_MODEL: str = "gpt-4o-mini"
 
+# Rate limiting settings
+DAILY_QUERY_LIMIT: int = 100  # Adjust based on your budget
+QUERIES_PER_SESSION: int = 20  # Prevent abuse in single session
+
 STEWARD_FOOTER: str = (
     "Stewardship note: use the narrowest effective antibiotic; reassess at 48 to 72 hours; "
     "follow local guidance and clinical judgment."
 )
 
-# IMPROVED SYSTEM PROMPT - removed A/B/C/D structure for cleaner output
 WHO_SYSTEM_PROMPT: str = """
 You are the WHO Antibiotic Guide, an AWaRe (Access, Watch, Reserve) Clinical Assistant.
 
@@ -85,10 +89,8 @@ st.set_page_config(page_title=APP_TITLE, page_icon="💊", layout="wide")
 st.title(f"💊 {APP_TITLE}")
 st.caption(APP_SUBTITLE)
 
-st.write(
-    "Guideline grounded decision support using the WHO AWaRe book; "
-    "supports antimicrobial stewardship; does not replace clinical judgment or local protocols."
-)
+# Banner for free access
+st.info("🎁 This app is **free to use** - no API key required! Funded for educational purposes.", icon="ℹ️")
 
 if PdfReader is None:
     st.error("Dependency missing: pypdf. Add pypdf to requirements.txt.")
@@ -102,6 +104,57 @@ def ensure_footer(text: str) -> str:
     if STEWARD_FOOTER.lower() in text.lower():
         return text
     return (text.rstrip() + "\n\n" + STEWARD_FOOTER).strip()
+
+
+def init_rate_limit_state():
+    """Initialize rate limiting state"""
+    if 'rate_limit' not in st.session_state:
+        st.session_state.rate_limit = {
+            'daily_count': 0,
+            'session_count': 0,
+            'last_reset': date.today(),
+        }
+    
+    # Reset daily counter if it's a new day
+    if st.session_state.rate_limit['last_reset'] < date.today():
+        st.session_state.rate_limit['daily_count'] = 0
+        st.session_state.rate_limit['last_reset'] = date.today()
+
+
+def check_rate_limit() -> bool:
+    """
+    Check if user has exceeded rate limits
+    Returns True if OK to proceed, False if limit exceeded
+    """
+    init_rate_limit_state()
+    
+    rl = st.session_state.rate_limit
+    
+    # Check daily limit
+    if rl['daily_count'] >= DAILY_QUERY_LIMIT:
+        st.error(f"⚠️ Daily limit of {DAILY_QUERY_LIMIT} queries reached.")
+        st.info(
+            "The daily limit helps us keep this service free for everyone. "
+            "Limit resets at midnight UTC. Please try again tomorrow!"
+        )
+        return False
+    
+    # Check session limit (prevent abuse)
+    if rl['session_count'] >= QUERIES_PER_SESSION:
+        st.warning(
+            f"⚠️ You've reached the session limit of {QUERIES_PER_SESSION} queries. "
+            "Please refresh the page to continue."
+        )
+        return False
+    
+    return True
+
+
+def increment_rate_limit():
+    """Increment rate limit counters"""
+    init_rate_limit_state()
+    st.session_state.rate_limit['daily_count'] += 1
+    st.session_state.rate_limit['session_count'] += 1
 
 
 def _clean_text(s: str) -> str:
@@ -188,7 +241,6 @@ def _search(index: "faiss.Index", client: OpenAI, query: str, chunks: List[Dict]
 
 
 def _make_context(hits: List[Dict], max_chars: int = 1500) -> str:
-    """Create context from retrieved chunks - increased from 1200 to 1500 chars"""
     blocks: List[str] = []
     for i, h in enumerate(hits, start=1):
         excerpt = h["text"]
@@ -222,10 +274,7 @@ Provide a clear, well-structured answer following the response format guidelines
 
 
 def _extract_openai_key(raw: Optional[str]) -> str:
-    """
-    Extract a valid ASCII key token from secrets or input.
-    Prevents UnicodeEncodeError caused by emojis or extra characters in the secret.
-    """
+    """Extract a valid ASCII key token from secrets or input"""
     if not raw:
         return ""
 
@@ -244,6 +293,7 @@ def _extract_openai_key(raw: Optional[str]) -> str:
 
 
 def _get_openai_key_from_secrets_or_env() -> str:
+    """Get API key from Streamlit secrets or environment"""
     key = ""
     try:
         key = st.secrets.get("OPENAI_API_KEY", "")
@@ -260,10 +310,10 @@ def _get_pdf_bytes_from_repo(local_path: str) -> Tuple[str, Optional[bytes], str
     if os.path.exists(local_path):
         try:
             data = _read_pdf_bytes_from_path(local_path)
-            return f"repo:{local_path}:{len(data)}", data, f"Using PDF from repo: {local_path}"
+            return f"repo:{local_path}:{len(data)}", data, f"✅ Using PDF from repo: {local_path}"
         except Exception as e:
-            return "repo:read_error", None, f"Failed to read repo PDF: {e}"
-    return "repo:missing", None, f"Missing PDF in repo root: {local_path}"
+            return "repo:read_error", None, f"❌ Failed to read repo PDF: {e}"
+    return "repo:missing", None, f"❌ Missing PDF in repo root: {local_path}"
 
 
 @st.cache_resource(show_spinner=True)
@@ -273,14 +323,14 @@ def build_retriever(pdf_cache_key: str, pdf_bytes: bytes, chunk_size: int, chunk
     if faiss is None:
         raise RuntimeError("faiss is not available.")
     if not openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY missing or invalid. Use only sk-... in Streamlit Secrets.")
+        raise RuntimeError("OPENAI_API_KEY missing or invalid.")
 
     client = OpenAI(api_key=openai_api_key)
 
     pages = _read_pdf_pages_from_bytes(pdf_bytes)
     chunks = _chunk_pages(pages, chunk_size, chunk_overlap)
     if not chunks:
-        raise RuntimeError("No text extracted from PDF. If the PDF is scanned, use a text based version or add OCR.")
+        raise RuntimeError("No text extracted from PDF.")
 
     vectors = _embed_texts(client, [c["text"] for c in chunks])
     index = _build_index(vectors)
@@ -288,65 +338,65 @@ def build_retriever(pdf_cache_key: str, pdf_bytes: bytes, chunk_size: int, chunk
     return {"chunks": chunks, "index": index}
 
 
+# Sidebar configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
-
-    st.markdown("**API Key**")
-    use_manual = st.toggle("Enter API key manually", value=False)
-
-    manual_raw = ""
-    if use_manual:
-        manual_raw = st.text_input("OpenAI API Key", type="password")
-
-    openai_api_key = _extract_openai_key(manual_raw) if manual_raw else _get_openai_key_from_secrets_or_env()
-
-    if openai_api_key:
-        st.success("✅ API key valid.")
-    else:
-        st.warning('⚠️ API key not found or invalid. In Streamlit Secrets use: OPENAI_API_KEY = "sk-..."')
+    
+    # Show usage stats
+    init_rate_limit_state()
+    rl = st.session_state.rate_limit
+    
+    daily_remaining = DAILY_QUERY_LIMIT - rl['daily_count']
+    session_remaining = QUERIES_PER_SESSION - rl['session_count']
+    
+    st.metric("Queries Remaining Today", f"{daily_remaining}/{DAILY_QUERY_LIMIT}")
+    st.metric("Queries This Session", f"{rl['session_count']}/{QUERIES_PER_SESSION}")
+    
+    st.caption(f"Resets: {date.today() + timedelta(days=1)} 00:00 UTC")
 
     st.divider()
 
     st.markdown("**📄 Document**")
-    st.caption("This app reads WHOAMR.pdf from your GitHub repo; no upload is required.")
-    st.caption("Confirm WHOAMR.pdf is in the same folder as streamlit_app.py in GitHub.")
+    st.caption("Using WHO AWaRe handbook (WHOAMR.pdf)")
 
     st.divider()
 
-    st.markdown("**🔍 Retrieval Settings**")
-    chunk_size = st.number_input("Chunk size (characters)", min_value=600, max_value=4000, value=1500, step=100)
-    chunk_overlap = st.number_input("Chunk overlap (characters)", min_value=0, max_value=800, value=200, step=50)
-    top_k = st.number_input("Top K chunks", min_value=2, max_value=10, value=5, step=1)
+    st.markdown("**🔍 Advanced Settings**")
+    with st.expander("Retrieval & Model Settings"):
+        chunk_size = st.number_input("Chunk size", min_value=600, max_value=4000, value=1500, step=100)
+        chunk_overlap = st.number_input("Chunk overlap", min_value=0, max_value=800, value=200, step=50)
+        top_k = st.number_input("Top K chunks", min_value=2, max_value=10, value=5, step=1)
+        temperature = st.slider("Temperature", min_value=0.0, max_value=0.6, value=0.0, step=0.1)
 
-    st.divider()
-
-    st.markdown("**🎛️ Model Settings**")
-    temperature = st.slider("Temperature", min_value=0.0, max_value=0.6, value=0.0, step=0.1)
-    debug = st.toggle("Debug mode (show full errors)", value=False)
+    debug = st.toggle("Debug mode", value=False)
 
     st.divider()
 
     st.markdown("**💡 Example Questions**")
     example_questions = [
-        "What is the first line treatment for pneumonia?",
+        "First line treatment for pneumonia?",
         "What are reserve antibiotics?",
-        "Treatment for UTI in adults?",
+        "UTI treatment in adults?",
         "Amoxicillin dosing for children?",
     ]
     
     for eq in example_questions:
-        if st.button(eq, key=f"example_{eq}", use_container_width=True):
-            st.session_state["example_question"] = eq
+        if st.button(eq, key=f"ex_{eq}", use_container_width=True):
+            st.session_state["example_q"] = eq
 
     st.divider()
 
-    st.subheader("⚠️ Disclaimer")
+    st.markdown("**ℹ️ About This Tool**")
     st.caption(
-        "Decision support tool based on WHO AWaRe content provided. "
-        "Does not replace clinical judgment or local and national prescribing guidelines."
+        "Free decision support based on WHO AWaRe handbook. "
+        "Does not replace clinical judgment or local guidelines."
     )
+    st.caption("Funded for educational use.")
 
+# Get API key from secrets
+openai_api_key = _get_openai_key_from_secrets_or_env()
 
+# Main content
 left, right = st.columns([2, 1])
 
 with right:
@@ -356,19 +406,18 @@ with right:
     st.write(pdf_status)
 
     if not openai_api_key:
-        st.error("❌ API key missing or invalid.")
+        st.error("❌ API key not configured in app secrets.")
     if pdf_bytes is None:
-        st.error("❌ PDF unavailable in repo.")
+        st.error("❌ PDF unavailable.")
     if PdfReader is None or faiss is None:
-        st.error("❌ Dependencies missing; check requirements.txt.")
-
+        st.error("❌ Dependencies missing.")
 
 resources = None
 retriever_error = None
 
 if openai_api_key and pdf_bytes is not None and PdfReader is not None and faiss is not None:
     try:
-        with st.spinner("🔨 Preparing retriever; building index on first run; using cache later"):
+        with st.spinner("🔨 Building index..."):
             resources = build_retriever(
                 pdf_cache_key=pdf_key,
                 pdf_bytes=pdf_bytes,
@@ -380,12 +429,11 @@ if openai_api_key and pdf_bytes is not None and PdfReader is not None and faiss 
         retriever_error = e
         resources = None
 
-
 with left:
     st.subheader("💬 Chat")
 
     if resources is None:
-        st.error("❌ Retriever not ready. Check API key and PDF availability in the sidebar.")
+        st.error("❌ Retriever not ready.")
         if retriever_error is not None:
             if debug:
                 st.exception(retriever_error)
@@ -393,7 +441,7 @@ with left:
                 st.write(f"Error: {retriever_error}")
         st.stop()
 
-    st.success(f"✅ Retriever ready; chunks indexed: {len(resources['chunks'])}")
+    st.success(f"✅ Ready | {len(resources['chunks'])} chunks indexed")
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -403,15 +451,21 @@ with left:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Handle example question button clicks
-    if "example_question" in st.session_state:
-        question = st.session_state["example_question"]
-        del st.session_state["example_question"]
-        st.rerun()
+    # Handle example questions
+    if "example_q" in st.session_state:
+        question = st.session_state["example_q"]
+        del st.session_state["example_q"]
     else:
-        question = st.chat_input("Ask about empiric therapy, dosing, duration, or when no antibiotics are appropriate...")
+        question = st.chat_input("Ask about antibiotic treatment...")
 
     if question:
+        # Check rate limit BEFORE processing
+        if not check_rate_limit():
+            st.stop()
+        
+        # Increment counter
+        increment_rate_limit()
+        
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
@@ -430,7 +484,7 @@ with left:
 
                 if not hits:
                     msg = ensure_footer(
-                        "I couldn't find specific information about this in the WHO AWaRe handbook provided.\n\n"
+                        "I couldn't find specific information about this in the WHO AWaRe handbook.\n\n"
                         "**Try:**\n"
                         "- Rephrasing with more general terms\n"
                         "- Asking about the condition rather than a specific drug\n"
@@ -444,27 +498,26 @@ with left:
                     answer_text = ensure_footer(answer_text)
                     st.session_state.messages.append({"role": "assistant", "content": answer_text})
 
-                    # Improved sources display
-                    with st.expander("📚 View Retrieved Sources", expanded=False):
-                        st.caption(f"Retrieved {len(hits)} most relevant chunks from the WHO AWaRe handbook:")
+                    with st.expander("📚 View Sources", expanded=False):
                         for i, h in enumerate(hits, start=1):
-                            st.markdown(f"**Source {i}** | Page {h['page']} | Similarity: {h['score']:.3f}")
-                            excerpt = h["text"][:800]
-                            st.text(excerpt + (" ..." if len(h["text"]) > 800 else ""))
+                            st.markdown(f"**Source {i}** | Page {h['page']} | Score: {h['score']:.3f}")
+                            st.text(h["text"][:800] + ("..." if len(h["text"]) > 800 else ""))
                             if i < len(hits):
                                 st.divider()
 
             except Exception as e:
+                # Decrement counter on error (don't penalize for errors)
+                st.session_state.rate_limit['session_count'] -= 1
+                st.session_state.rate_limit['daily_count'] -= 1
+                
                 if debug:
                     st.exception(e)
                 else:
                     st.error(f"❌ Request failed: {e}")
-                    st.info("Enable 'Debug mode' in the sidebar to see full error details.")
 
-    # Limit chat history to prevent memory issues
+    # Limit chat history
     if len(st.session_state.messages) > 24:
         st.session_state.messages = st.session_state.messages[-24:]
 
-# Footer
 st.divider()
-st.caption("WHO AWaRe Antibiotic Guide | Decision support tool | Always follow local protocols and clinical judgment")
+st.caption("WHO AWaRe Antibiotic Guide | Free for educational use | Always follow local protocols")
