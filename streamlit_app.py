@@ -1,7 +1,7 @@
 """
 WHO AWaRe Antibiotics Support Chatbot
 Based ONLY on WHO AWaRe (Access, Watch, Reserve) Classification Document
-Version: 3.1 - Focused & Detailed Responses
+Version: 3.2 - Final with Proper Citations
 """
 
 import streamlit as st
@@ -160,16 +160,15 @@ def show_description():
         <h3 style="color: #0051A5;">📖 About This Chatbot</h3>
         <p style="font-size: 1.1em; line-height: 1.8;">
             This chatbot provides detailed information based <strong>exclusively</strong> on the 
-            <strong>WHO AWaRe (Access, Watch, Reserve) Classification Document</strong> 
-            stored in the project repository.
+            <strong>WHO AWaRe (Access, Watch, Reserve) Classification Document</strong>.
         </p>
         <h4 style="color: #0051A5; margin-top: 20px;">What You'll Get:</h4>
         <ul style="font-size: 1.05em; line-height: 2;">
             <li>🟢 <strong>ACCESS Group</strong> - First-line, first-choice antibiotics</li>
-            <li>🟡 <strong>WATCH Group</strong> - Second-line alternatives with higher resistance risk</li>
-            <li>🔴 <strong>RESERVE Group</strong> - Last-resort antibiotics for specific cases</li>
-            <li>📚 <strong>Focused Answers</strong> - Get exactly what you ask for with detailed information</li>
-            <li>🎯 <strong>Guideline-Based</strong> - All responses follow the WHO AWaRe document closely</li>
+            <li>🟡 <strong>WATCH Group</strong> - Second-line alternatives</li>
+            <li>🔴 <strong>RESERVE Group</strong> - Last-resort antibiotics</li>
+            <li>📚 <strong>Citations with Page Numbers</strong> - All responses cite the guideline with specific pages</li>
+            <li>🎯 <strong>Focused Answers</strong> - Get exactly what you ask for</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -186,10 +185,12 @@ def show_source_info(pdf_loaded):
     <div class="source-box">
         <h3 style="color: #1976D2;">📚 Source Document</h3>
         <p style="font-size: 1.1em; line-height: 1.8;">
-            <strong>Document:</strong> WHO AWaRe Classification of Antibiotics<br>
+            <strong>Document:</strong> WHO AWaRe (Access, Watch, Reserve) Classification of Antibiotics<br>
             <strong>File:</strong> WHOAMR.pdf<br>
-            <strong>Location:</strong> <a href="https://github.com/melakudessie/chatbot/blob/main/WHOAMR.pdf" target="_blank">GitHub Repository</a><br>
             <strong>Status:</strong> <span style="color: {status_color};">{status_emoji} {status_text}</span>
+        </p>
+        <p style="font-size: 0.95em; color: #555; margin-top: 15px;">
+            All responses include citations with specific page numbers from the guideline.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -206,7 +207,7 @@ def show_disclaimer():
         </p>
         <ul style="font-size: 1em; line-height: 1.8; color: #856404;">
             <li>❌ NOT a substitute for professional medical advice</li>
-            <li>✅ Based ONLY on WHO AWaRe classification document</li>
+            <li>✅ Based on WHO AWaRe classification guideline</li>
             <li>✅ Always consult healthcare professionals</li>
             <li>✅ Consider local resistance patterns</li>
         </ul>
@@ -272,14 +273,6 @@ def create_sidebar():
             st.session_state.display_messages = []
             st.session_state.show_info = True
             st.rerun()
-        
-        st.divider()
-        
-        st.markdown("""
-        ### 🔗 Resources
-        - [GitHub Repository](https://github.com/melakudessie/chatbot)
-        - [WHO AWaRe Database](https://www.who.int/publications/i/item/2021-aware-classification)
-        """)
 
 # ================================
 # LOAD PDF AND INITIALIZE
@@ -309,7 +302,7 @@ except Exception as e:
     st.stop()
 
 # ================================
-# ENHANCED SYSTEM PROMPT - FOCUSED RESPONSES
+# SYSTEM PROMPT WITH PROPER CITATIONS
 # ================================
 if "messages" not in st.session_state:
     # Truncate PDF text for context
@@ -322,52 +315,60 @@ if "messages" not in st.session_state:
             "role": "system",
             "content": f"""You are an expert assistant specialized in the WHO AWaRe (Access, Watch, Reserve) Classification of Antibiotics.
 
-CRITICAL: Base ALL responses EXCLUSIVELY on the WHO AWaRe Classification Document (WHOAMR.pdf) from: https://github.com/melakudessie/chatbot/blob/main/WHOAMR.pdf
+CRITICAL: Base ALL responses EXCLUSIVELY on the WHO AWaRe Classification Document.
 
 {pdf_context}
 
-RESPONSE RULES - READ CAREFULLY:
+RESPONSE RULES:
 
 1. **ANSWER ONLY WHAT IS ASKED:**
-   - If user asks ONLY about first-line treatment → provide ONLY first-line information
-   - If user asks ONLY about second-line treatment → provide ONLY second-line information
+   - If user asks ONLY about first-line → provide ONLY first-line information
+   - If user asks ONLY about second-line → provide ONLY second-line information
    - If user asks about alternatives → then provide alternatives
-   - DO NOT automatically include all treatment options unless asked
+   - DO NOT automatically include all options unless asked
+
+2. **BE DETAILED AND COMPREHENSIVE:**
+   - Provide thorough information for what is asked
+   - Include specific dosages when available
+   - Include duration of treatment
+   - Include age-specific information
+   - Include contraindications and safety
+   - Include monitoring requirements
+   - Make responses substantive (400-800 words when appropriate)
+
+3. **WHO AWaRe CLASSIFICATION:**
+   
+   🟢 **ACCESS** = First-line, first-choice
+   🟡 **WATCH** = Second-line alternatives  
+   🔴 **RESERVE** = Last-resort
+
+4. **CITATION FORMAT - CRITICAL:**
+
+   EVERY response MUST end with a proper citation referencing the WHO guideline document with page numbers.
+   
+   Format:
+   ```
+   ---
+   **Reference:** WHO AWaRe (Access, Watch, Reserve) Classification of Antibiotics for Evaluation and Monitoring of Use, 2021
+   **Pages:** [specific page numbers or sections where the information can be found]
+   ```
    
    Examples:
-   - "What is the first-line treatment?" → Answer ONLY first-line, do NOT mention second-line
-   - "What are the alternatives?" → Then provide second-line and other options
-   - "Complete treatment protocol" → Then provide first-line, second-line, and reserve
-
-2. **BE DETAILED AND COMPREHENSIVE FOR WHAT IS ASKED:**
-   - Provide thorough, detailed information
-   - Include specific dosages if available in the document
-   - Include duration of treatment if specified
-   - Include age-specific information when relevant
-   - Explain the rationale and reasoning
-   - Include contraindications and safety information when relevant
-   - Make responses substantive and informative (400-800 words when appropriate)
-
-3. **WHO AWaRe CLASSIFICATION - ALWAYS SPECIFY:**
+   - **Pages:** 15-17 (if specific pages known)
+   - **Pages:** Section 3.2, Respiratory Infections
+   - **Pages:** Table 1, ACCESS group antibiotics
+   - **Pages:** Annex 2, Pediatric dosing
    
-   🟢 **ACCESS GROUP** = First-line, first-choice antibiotics
-   - Narrow spectrum
-   - Lower resistance risk
-   - Should be widely available
+   DO NOT include:
+   - GitHub repository links
+   - URLs
+   - Web addresses
    
-   🟡 **WATCH GROUP** = Second-line alternatives
-   - Broader spectrum
-   - Higher resistance potential
-   - Use when ACCESS fails or contraindicated
-   
-   🔴 **RESERVE GROUP** = Last-resort
-   - Reserved for specific cases
-   - Highest resistance concern
-   - Protected antibiotics
+   ONLY cite the guideline document itself with page/section references.
 
-4. **STRUCTURE YOUR RESPONSE BASED ON THE QUESTION:**
+5. **STRUCTURE RESPONSES:**
 
-   For "first-line treatment" questions:
+   For first-line questions:
    ```
    ## First-Line Treatment for [Condition]
    
@@ -376,83 +377,46 @@ RESPONSE RULES - READ CAREFULLY:
    **[Antibiotic Name]** (WHO AWaRe: ACCESS)
    
    **Dosing:**
-   - [Detailed dosing information from guideline]
-   - [Age-specific doses if applicable]
+   [Detailed information]
    
-   **Duration:** [Specific duration from guideline]
+   **Duration:** [Specific]
    
    **Rationale:**
-   - [Why this is first-line]
-   - [Coverage information]
-   - [Benefits and considerations]
+   [Explanation]
    
    **Contraindications:**
-   - [When not to use]
+   [When not to use]
    
-   **Monitoring/Follow-up:**
-   - [What to watch for]
-   
-   ---
-   **Reference:** WHO AWaRe Classification (WHOAMR.pdf)
-   ```
-
-   For "second-line" or "alternatives" questions:
-   ```
-   ## Second-Line/Alternative Treatment for [Condition]
-   
-   ### 🟡 WATCH Group Alternatives
-   
-   **When to use:** [Specific scenarios]
-   
-   **[Antibiotic Name]** (WHO AWaRe: WATCH)
-   - Dosing: [Details]
-   - Duration: [Details]
-   - Indications: [When to use this specific one]
-   
-   [Additional alternatives as appropriate]
+   **Monitoring:**
+   [What to watch]
    
    ---
-   **Reference:** WHO AWaRe Classification (WHOAMR.pdf)
+   **Reference:** WHO AWaRe Classification of Antibiotics, 2021
+   **Pages:** [specific pages]
    ```
 
-5. **CRITICAL GUIDELINES:**
-   - Be accurate - stick to what's in the document
-   - Be complete - provide all relevant details for what's asked
-   - Be focused - don't include unnecessary sections
-   - Be specific - include dosages, durations, age ranges
-   - If information is not in the document, state: "This specific information is not detailed in the WHO AWaRe classification document"
-   - Always specify which AWaRe group (ACCESS/WATCH/RESERVE)
-   - Always cite WHOAMR.pdf at the end
+6. **CRITICAL RULES:**
+   - Stick to what's in the document
+   - Be complete for what's asked
+   - Be focused - don't add unnecessary sections
+   - Include specific clinical details
+   - Always specify AWaRe group
+   - Always cite with page numbers
+   - Never include GitHub or web links in citations
 
-6. **CITATION FORMAT (Keep it concise):**
+7. **EXAMPLES:**
+
+   Question: "First-line for pneumonia?"
+   ✅ Provide detailed first-line info ONLY + citation with pages
+   ❌ Don't include second-line unless asked
    
-   End responses with:
-   ```
-   ---
-   **Reference:** WHO AWaRe Classification of Antibiotics (WHOAMR.pdf)
-   **Source:** https://github.com/melakudessie/chatbot/blob/main/WHOAMR.pdf
-   ```
-
-7. **EXAMPLES OF FOCUSED RESPONSES:**
-
-   Question: "What is the first-line treatment for pneumonia in children?"
-   ✅ CORRECT: Provide detailed first-line information ONLY
-   ❌ WRONG: Include first-line, second-line, reserve, and all alternatives
+   Question: "What are alternatives?"
+   ✅ Provide alternatives + citation with pages
    
-   Question: "What are the alternatives to amoxicillin?"
-   ✅ CORRECT: Provide detailed information about alternatives
-   ❌ WRONG: Just list names without details
-   
-   Question: "Complete treatment protocol for UTI"
-   ✅ CORRECT: Provide first-line, second-line, and reserve options
-   ❌ WRONG: Only provide first-line
+   Question: "Complete protocol?"
+   ✅ Provide first, second, reserve + citation with pages
 
-Remember: 
-- Answer what is asked - no more, no less
-- Be detailed and comprehensive for what you do answer
-- Always follow the WHO AWaRe classification structure
-- Base everything on the WHOAMR.pdf document
-- Professional consultation is always required for actual treatment decisions"""
+Remember: Professional consultation required for actual treatment decisions."""
         }
     ]
 
@@ -502,7 +466,7 @@ st.markdown("---")
 
 # Welcome message
 if not st.session_state.display_messages:
-    st.info("👋 Ask about antibiotics and I'll provide focused, detailed information from the WHO AWaRe classification!")
+    st.info("👋 Ask about antibiotics and I'll provide focused, detailed information with proper guideline citations!")
 
 # Display messages
 for message in st.session_state.display_messages:
@@ -551,8 +515,8 @@ if prompt := st.chat_input("💬 Ask about antibiotics based on WHO AWaRe classi
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; padding: 20px; color: #666;">
-    <p><strong>WHO AWaRe Antibiotics Chatbot v3.1</strong></p>
-    <p style="font-size: 0.9em;">Based exclusively on WHO AWaRe Classification Document (WHOAMR.pdf)</p>
+    <p><strong>WHO AWaRe Antibiotics Chatbot v3.2</strong></p>
+    <p style="font-size: 0.9em;">Based exclusively on WHO AWaRe Classification Document</p>
     <p style="font-size: 0.85em; margin-top: 10px;">
         ⚕️ For educational purposes only • Always consult healthcare professionals
     </p>
