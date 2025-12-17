@@ -12,80 +12,95 @@ from langchain_core.runnables import RunnablePassthrough
 
 # --- CONSTANTS ---
 PDF_FILE_PATH = "WHOAMR.pdf"  # File must be in the repo root
+APP_TITLE = "PrescribeWise - Health Worker Assistant"
 
-# --- 1. APP CONFIGURATION ---
+# --- 1. PAGE & BRANDING CONFIGURATION ---
 st.set_page_config(
-    page_title="PrescribeWise Assistant",
+    page_title=APP_TITLE,
     page_icon="🩺",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- CSS FOR STYLING ---
+# --- 2. PROFESSIONAL STYLING (CSS) ---
 st.markdown("""
     <style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #0E1117;
-        text-align: center;
-        font-weight: 700;
-        margin-bottom: 0.5rem;
-    }
-    .sub-header {
-        font-size: 1.2rem;
-        color: #4F4F4F;
-        text-align: center;
+    /* Main Header Styling */
+    .header-container {
+        background: linear-gradient(90deg, #005c97 0%, #363795 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        color: white;
         margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
+    .header-title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        margin: 0;
+    }
+    .header-subtitle {
+        font-size: 1.2rem;
+        opacity: 0.9;
+        margin-top: 5px;
+    }
+    
+    /* Disclaimer Box Styling */
     .disclaimer-box {
-        background-color: #FFF4E5;
-        border-left: 5px solid #FFA500;
+        background-color: #fff3cd;
+        border-left: 6px solid #ffc107;
         padding: 15px;
         border-radius: 5px;
-        margin-bottom: 20px;
+        color: #856404;
         font-size: 0.9rem;
+        margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- HEADER SECTION ---
-st.markdown('<div class="main-header">🩺 PrescribeWise</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">AI-Powered Assistant for WHO Antimicrobial Guidelines</div>', unsafe_allow_html=True)
+# --- 3. UI LAYOUT ---
 
-# --- DISCLAIMER ---
-st.markdown("""
-<div class="disclaimer-box">
-    <strong>⚠️ IMPORTANT DISCLAIMER:</strong><br>
-    This AI tool is designed to assist healthcare professionals by retrieving information from the 
-    <em>WHO AWaRe (Access, Watch, Reserve) Antibiotic Book</em>. 
-    It is <strong>NOT</strong> a substitute for professional medical judgment. 
-    Always verify dosages and treatment plans against the primary guidelines and local protocols.
-</div>
+# Custom Header
+st.markdown(f"""
+    <div class="header-container">
+        <div class="header-title">🩺 PrescribeWise</div>
+        <div class="header-subtitle">AI-Powered Assistant for WHO Antimicrobial Guidelines</div>
+    </div>
 """, unsafe_allow_html=True)
 
-# --- 2. CREDENTIALS & FILE CHECK ---
+# Professional Disclaimer
+st.markdown("""
+    <div class="disclaimer-box">
+        <strong>⚠️ IMPORTANT MEDICAL DISCLAIMER</strong><br>
+        This AI tool assists healthcare professionals by retrieving information solely from the 
+        <em>WHO AWaRe Antibiotic Book</em>. It does <strong>not</strong> replace professional medical judgment. 
+        Always verify dosages and treatment protocols with local guidelines.
+    </div>
+""", unsafe_allow_html=True)
+
+# --- 4. CREDENTIALS & FILE CHECK ---
 if "OPENAI_API_KEY" in st.secrets:
     api_key = st.secrets["OPENAI_API_KEY"]
 else:
-    st.error("🚨 OpenAI API Key missing! Please add it to Streamlit Secrets.")
+    st.error("🚨 API Key missing! Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
     st.stop()
 
 if not os.path.exists(PDF_FILE_PATH):
-    st.error(f"🚨 File not found: `{PDF_FILE_PATH}`. Please ensure it is in your GitHub repo.")
+    st.error(f"🚨 Guidelines file not found: `{PDF_FILE_PATH}`. Please upload it to your GitHub repository.")
     st.stop()
 
-# --- 3. CACHED KNOWLEDGE BASE ---
+# --- 5. CACHED KNOWLEDGE BASE ---
 @st.cache_resource(show_spinner=False)
 def load_knowledge_base(key):
     try:
         loader = PyPDFLoader(PDF_FILE_PATH)
         docs = loader.load()
         
-        # Optimized splitting for medical context
+        # Splitter optimized for medical guidelines
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, 
+            chunk_size=1000,
             chunk_overlap=200,
-            separators=["\n\n", "\n", "●", "•", ".", " "]
+            separators=["\n\n", "\n", "●", "•", "-", " "]
         )
         splits = splitter.split_documents(docs)
         
@@ -95,51 +110,56 @@ def load_knowledge_base(key):
     except Exception as e:
         raise e
 
-# --- 4. MAIN LOGIC ---
+# --- 6. MAIN LOGIC ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Sidebar
+# Sidebar Configuration
 with st.sidebar:
-    st.header("ℹ️ About App")
-    st.info("""
-    **Source Material:** WHO AWaRe Antibiotic Book (2022)
+    st.image("https://cdn-icons-png.flaticon.com/512/3063/3063176.png", width=50)
+    st.header("App Settings")
+    st.divider()
     
-    **Capabilities:** - Treatment guidelines
-    - Pediatric & Adult dosing
-    - AWaRe Classification
-    """)
+    st.markdown("### 🚦 AWaRe Color Legend")
+    st.markdown(":green[**🟢 First Choice (Access)**]")
+    st.markdown(":orange[**🟡 Second Choice (Watch)**]")
+    st.markdown(":red[**🔴 Last Resort (Reserve)**]")
     
     st.divider()
-    if st.button("🗑️ Clear Chat History", use_container_width=True):
+    
+    st.markdown("### 📚 Source Material")
+    st.info("WHO AWaRe (Access, Watch, Reserve) Antibiotic Book (2022)")
+    
+    st.divider()
+    
+    if st.button("🔄 Start New Consultation", type="primary", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
-    
-    st.caption(f"App Version 2.1 | Model: GPT-4")
 
-# Load DB
+# Load Database
 with st.spinner("Initializing medical knowledge base..."):
     try:
         vectorstore = load_knowledge_base(api_key)
-        # RETRIEVER CONFIG: k=6 for more detailed context
+        # RETRIEVER: K=6 for detailed context
         retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
     except Exception as e:
-        st.error(f"Failed to load knowledge base: {e}")
+        st.error(f"Initialization Failed: {e}")
         st.stop()
 
-# --- 5. DETAILED PROMPT CHAIN ---
+# --- 7. COLOR-CODED PROMPT ENGINEERING ---
 template = """You are PrescribeWise, an expert medical assistant based on the WHO AWaRe Antibiotic Book.
 
 INSTRUCTIONS:
 1. Answer the question comprehensively using ONLY the context provided below.
-2. If the query asks for treatment, include:
-   - First Choice Antibiotics
-   - Second Choice / Alternatives
-   - Dosages (Adult & Pediatric if available)
-   - Duration of therapy
-3. Use bullet points for readability.
-4. If the answer is not in the context, state: "I cannot find this specific information in the provided WHO guidelines."
-5. **CITATION:** You MUST cite the page number for every major claim (e.g., [Page 45]).
+2. **COLOR CODING RULES:** You must use Streamlit Markdown colors for treatment lines:
+   - For **First Choice / Access** antibiotics, format the line like this: :green[**🟢 First Choice:** Drug Name, Dosage, Duration]
+   - For **Second Choice / Watch** antibiotics, format the line like this: :orange[**🟡 Second Choice:** Drug Name, Dosage, Duration]
+   - For **Reserve / Last Resort** antibiotics, format the line like this: :red[**🔴 Reserve:** Drug Name, Dosage, Duration]
+   - For **Comments/Warnings**, use standard text.
+
+3. Include dosages (Adult & Pediatric) and duration if available.
+4. If the answer is not in the context, state: "I cannot find this specific information in the WHO guidelines."
+5. **CITATION:** Cite the page number for every section (e.g., [Page 45]).
 
 CONTEXT:
 {context}
@@ -160,30 +180,49 @@ rag_chain = (
     | StrOutputParser()
 )
 
-# --- 6. CHAT INTERFACE ---
+# --- 8. CHAT INTERFACE ---
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
+    avatar = "👤" if msg["role"] == "user" else "🩺"
+    with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
 
-if user_input := st.chat_input("Ex: What is the treatment for severe pneumonia in children?"):
-    # User Message
+if user_input := st.chat_input("Ex: What is the treatment for acute otitis media in children?"):
     st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar="👤"):
         st.markdown(user_input)
 
-    # Assistant Message
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar="🩺"):
         with st.spinner("Consulting WHO guidelines..."):
             try:
+                # Retrieve and Format
+                relevant_docs = retriever.invoke(user_input)
+                formatted_context = format_docs(relevant_docs)
+                
+                # Stream Response
                 response_container = st.empty()
                 full_response = ""
                 
-                # Stream response
-                for chunk in rag_chain.stream(user_input):
+                # Chain with manually injected context (to allow streaming + source retrieval)
+                stream_chain = (
+                    {"context": lambda x: formatted_context, "question": RunnablePassthrough()}
+                    | prompt 
+                    | llm 
+                    | StrOutputParser()
+                )
+                
+                for chunk in stream_chain.stream(user_input):
                     full_response += chunk
                     response_container.markdown(full_response + "▌")
                 
                 response_container.markdown(full_response)
+                
+                # View Evidence Expander
+                with st.expander("🔍 View Clinical Evidence (Source Text)"):
+                    for i, doc in enumerate(relevant_docs):
+                        st.markdown(f"**Source {i+1} (Page {doc.metadata.get('page', '?')})**")
+                        st.caption(doc.page_content)
+                        st.divider()
+                
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 
             except Exception as e:
