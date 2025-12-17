@@ -99,42 +99,31 @@ def create_chunks(pages):
     Tracks which page(s) the chunk belongs to.
     """
     chunks = []
-    current_chunk = ""
-    current_pages = set()
     
     # Flatten text stream but keep track of page transitions
-    # This is a simplified sliding window approach that respects your size constraints
-    
     full_text_stream = []
     for page_num, text in pages:
-        # Clean text slightly
         clean_text = text.replace('\n', ' ').strip()
         full_text_stream.append({"text": clean_text, "page": page_num})
         
-    # We iterate through the stream and build chunks
-    current_text_buffer = ""
-    start_page = full_text_stream[0]['page']
-    
-    # Iterate through all pages and concatenate, then slice
-    # Note: For strict page tracking in a sliding window, we map char indices to pages
-    # simpler approach: Combine all text, then chunk, then find page numbers (heuristic)
-    # Better approach for accuracy: Chunk per page, merge if small.
-    
-    # Implementation of exact sliding window:
+    # Combine all text while mapping character indices to page numbers
     combined_text = ""
-    page_map = [] # List of (char_index, page_number)
+    page_map = [] # List of dictionaries: {"start": int, "end": int, "page": int}
     
     for entry in full_text_stream:
         start_index = len(combined_text)
         combined_text += entry['text'] + " "
         end_index = len(combined_text)
-        # We record that this range belongs to this page
         page_map.append({"start": start_index, "end": end_index, "page": entry['page']})
         
     # Create Chunks
     total_len = len(combined_text)
     step = CHUNK_SIZE - CHUNK_OVERLAP
     
+    # Prevent infinite loop if text is empty
+    if total_len == 0:
+        return []
+
     for i in range(0, total_len, step):
         end = min(i + CHUNK_SIZE, total_len)
         chunk_text = combined_text[i:end]
@@ -142,12 +131,18 @@ def create_chunks(pages):
         # Find which pages are in this chunk
         chunk_pages = set()
         for mapping in page_map:
-            # Check for intersection
+            # Check for intersection between chunk range and page range
             if max(i, mapping['start']) < min(end, mapping['end']):
                 chunk_pages.add(mapping['page'])
         
+        if not chunk_pages:
+            continue
+
         sorted_pages = sorted(list(chunk_pages))
-        page_ref = f"{sorted_pages[0]}" if len(sorted_pages) == 1 else f"{sorted_pages[0]}-{sorted_pages[-1]}"
+        if len(sorted_pages) == 1:
+            page_ref = f"{sorted_pages[0]}"
+        else:
+            page_ref = f"{sorted_pages[0]}-{sorted_pages[-1]}"
         
         if len(chunk_text) > 100: # Skip tiny chunks
             chunks.append({
@@ -168,16 +163,18 @@ def load_and_index_pdf(pdf_path, _client):
         
     # 2. Create Chunks
     raw_chunks = create_chunks(pages)
-    st.toast(f"Parsed {len(raw_chunks)} chunks from document.", icon="📚")
     
     # 3. Generate Embeddings
     try:
         text_list = [c["text"] for c in raw_chunks]
         embeddings = []
         
+        # Batching for API reliability
         batch_size = 100
         for i in range(0, len(text_list), batch_size):
             batch = text_list[i : i + batch_size]
+            if not batch: 
+                continue
             response = _client.embeddings.create(
                 input=batch,
                 model=EMBEDDING_MODEL
@@ -208,7 +205,9 @@ def retrieve_context(query, kb, client):
     sims = np.dot(kb["embeddings"], query_vec)
     
     # Get Top K
-    top_indices = np.argsort(sims)[-TOP_K_CHUNKS:][::-1]
+    # Ensure we don't try to get more chunks than exist
+    k = min(TOP_K_CHUNKS, len(kb["chunks"]))
+    top_indices = np.argsort(sims)[-k:][::-1]
     
     results = []
     for idx in top_indices:
@@ -287,6 +286,15 @@ def main():
     elif not kb:
         st.warning("⚠️ 'WHOAMR.pdf' not found. Please upload the document.")
     else:
+        # Show toast here (safe from cache error)
+        # We only want to show it once per run logic or let it be ephemeral
+        # Since main() runs on every interaction, we can check if it's already shown via session state
+        # or just let it show (st.toast is unobtrusive).
+        # To avoid annoyance, we can make it conditional or just show it:
+        if "kb_loaded" not in st.session_state:
+            st.toast(f"Knowledge Base Loaded: {len(kb['chunks'])} chunks parsed.", icon="📚")
+            st.session_state.kb_loaded = True
+
         # Show intro only if chat is empty
         if not st.session_state.messages:
             render_simplified_intro()
