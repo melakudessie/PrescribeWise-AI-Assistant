@@ -12,7 +12,7 @@ MODEL_NAME = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 # RAG Parameters (Hidden from UI)
-CHUNK_SIZE = 2500
+CHUNK_SIZE = 1512
 CHUNK_OVERLAP = 200
 TOP_K_CHUNKS = 6  # Increased to 6 to ensure enough context for detailed answers
 
