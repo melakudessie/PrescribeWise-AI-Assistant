@@ -1,7 +1,6 @@
 """
-WHO AWaRe Antibiotics Support Chatbot
-Based ONLY on WHO AWaRe (Access, Watch, Reserve) Classification Document
-Version: 3.2 - Final with Proper Citations
+AntibioticsRx Assistant
+Based ONLY on The WHO AWaRe(Access, Watch, Reserve) Antibiotic Book(2022)
 """
 
 import streamlit as st
@@ -14,7 +13,7 @@ import PyPDF2
 # PAGE CONFIGURATION
 # ================================
 st.set_page_config(
-    page_title="WHO AWaRe Antibiotics Bot",
+    page_title="AntibioticsRx Assistant Bot",
     page_icon="💊",
     layout="wide",
     initial_sidebar_state="expanded"
