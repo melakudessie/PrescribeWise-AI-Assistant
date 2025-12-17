@@ -1,107 +1,117 @@
 import streamlit as st
 import tempfile
 import os
+
+# --- MODERN IMPORTS (STABLE) ---
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-
-# --- FIX: USE DIRECT IMPORT PATH TO AVOID VERSION CONFLICTS ---
-from langchain.chains.retrieval_qa.base import RetrievalQA
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 
 # --- 1. APP CONFIGURATION ---
 st.set_page_config(page_title="PrescribeWise Assistant", page_icon="🩺", layout="wide")
 st.title("🩺 PrescribeWise: Health Worker Assistant")
 
-# --- 2. SIDEBAR SETUP ---
+# --- 2. SIDEBAR CONFIGURATION ---
 with st.sidebar:
     st.header("⚙️ Configuration")
     api_key = st.text_input("OpenAI API Key", type="password")
     uploaded_file = st.file_uploader("Upload Medical Guidelines (PDF)", type="pdf")
-    st.info("ℹ️ Upload the 'WHOAMR.pdf' to start.")
 
-# --- 3. CACHED DOCUMENT PROCESSING ---
+# --- 3. CACHED PDF PROCESSING ---
 @st.cache_resource(show_spinner=False)
-def load_and_process_pdf(file, api_key):
-    # Create temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-        tmp_file.write(file.getvalue())
-        tmp_path = tmp_file.name
+def process_pdf(file, key):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(file.getvalue())
+        tmp_path = tmp.name
 
     try:
-        # Load and Split
+        # Load
         loader = PyPDFLoader(tmp_path)
-        documents = loader.load()
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        splits = text_splitter.split_documents(documents)
+        docs = loader.load()
+        
+        # Split
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        splits = splitter.split_documents(docs)
         
         # Embed
-        embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-        vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
+        embeddings = OpenAIEmbeddings(openai_api_key=key)
+        vectorstore = FAISS.from_documents(splits, embeddings)
         return vectorstore
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# --- 4. MAIN LOGIC ---
+# --- 4. MAIN APP LOGIC ---
 if not api_key:
-    st.warning("Please enter your OpenAI API Key.")
+    st.info("👋 Please enter your OpenAI API Key to continue.")
     st.stop()
 
 if not uploaded_file:
-    st.info("Please upload the PDF document.")
+    st.info("📄 Please upload the WHOAMR.pdf file.")
     st.stop()
 
-# Initialize Chat
+# Initialize Chat History
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Process PDF
-with st.spinner("Processing PDF... (One-time setup)"):
+# Process PDF (Cached)
+with st.spinner("Processing guidelines..."):
     try:
-        vectorstore = load_and_process_pdf(uploaded_file, api_key)
+        vectorstore = process_pdf(uploaded_file, api_key)
         retriever = vectorstore.as_retriever()
     except Exception as e:
         st.error(f"Error processing PDF: {e}")
         st.stop()
 
-# --- 5. SETUP QA CHAIN (Direct Import Fix) ---
-llm = ChatOpenAI(model="gpt-4", openai_api_key=api_key, temperature=0)
+# --- 5. BUILD THE MODERN CHAIN (LCEL) ---
+# This replaces RetrievalQA and avoids the import errors
+template = """You are a helpful medical assistant called PrescribeWise.
+Answer the question based ONLY on the following context.
+If the answer is not in the context, say "I cannot find this information in the guidelines."
+Always cite the page number if available in the context.
 
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    chain_type="stuff",
-    retriever=retriever,
-    return_source_documents=True
+Context:
+{context}
+
+Question:
+{question}
+"""
+prompt = ChatPromptTemplate.from_template(template)
+llm = ChatOpenAI(model="gpt-4", temperature=0, openai_api_key=api_key)
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+# The LCEL Chain (Source -> Format -> Prompt -> LLM -> String)
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
 )
 
 # --- 6. CHAT INTERFACE ---
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-if user_input := st.chat_input("Ask about medical guidelines..."):
+if user_input := st.chat_input("Ask about antibiotic dosages..."):
+    # Show User Message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
+    # Generate Response
     with st.chat_message("assistant"):
-        with st.spinner("Consulting guidelines..."):
+        with st.spinner("Analyzing..."):
             try:
-                # 'invoke' is the new standard, but 'run' is safer for older versions
-                # We use __call__ dictionary input for maximum compatibility
-                response = qa_chain({"query": user_input})
-                answer = response["result"]
-                
-                # Show Sources
-                with st.expander("📚 View Source Snippets"):
-                    for i, doc in enumerate(response["source_documents"]):
-                        page = doc.metadata.get("page", "Unknown")
-                        st.markdown(f"**Source {i+1} (Page {page}):**")
-                        st.markdown(f"> {doc.page_content[:200]}...")
-
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-                
+                # Stream the response for better UX
+                response = rag_chain.invoke(user_input)
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
             except Exception as e:
-                st.error(f"Error generating response: {e}")
+                st.error(f"An error occurred: {e}")
