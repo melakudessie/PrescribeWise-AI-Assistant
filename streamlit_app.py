@@ -115,7 +115,8 @@ with st.sidebar:
             "Spanish (Español)", 
             "Arabic (العربية)",
             "Portuguese (Português)"
-        ]
+        ],
+        key="language_selector"  # Added key to ensure state stability
     )
     st.divider()
     
@@ -138,43 +139,23 @@ with st.spinner("Initializing medical knowledge base..."):
         st.error(f"Initialization Failed: {e}")
         st.stop()
 
-# --- 7. DYNAMIC PROMPT LOGIC ---
+# --- 7. ROBUST PROMPT ENGINEERING ---
 
-# Step 1: Define which languages need "Chain of Thought" (English -> Translation)
-# African languages often perform better if the AI thinks in English first.
-AFRICAN_LANGUAGES = ["Amharic (አማርኛ)", "Swahili (Kiswahili)", "Oromo (Afaan Oromoo)"]
-
-# Step 2: Determine the instruction based on selection
-if selected_language in AFRICAN_LANGUAGES:
-    # STRATEGY: Think in English -> Output in Target Language
-    logic_instruction = """
-    **CRITICAL TRANSLATION STRATEGY:**
-    1. First, formulate the FULL, DETAILED medical answer internally in **English** to ensure medical accuracy.
-    2. Then, translate that detailed English answer accurately into **{language}**.
-    3. Output **ONLY** the final translated response (do not show the English thought process).
-    """
-else:
-    # STRATEGY: Direct Generation (Better for French, Spanish, English)
-    logic_instruction = """
-    **STRATEGY:**
-    1. Answer directly and fluently in **{language}**.
-    """
-
-# Step 3: Build the Prompt
 template = """You are PrescribeWise, an expert medical assistant based on the WHO AWaRe Antibiotic Book.
 
 INSTRUCTIONS:
-1. {logic_instruction}
+1. **LANGUAGE ENFORCEMENT:** You have been instructed to answer in **{language}**.
+   - {logic_instruction}
+   - (IGNORE any previous conversation language. Answer ONLY in {language}).
 
-2. **DETAIL LEVEL: HIGH.** - You must provide a comprehensive answer. Do not summarize.
+2. **DETAIL LEVEL: HIGH.** - Provide a comprehensive answer. Do not summarize.
    - Explicitly list: **Drug Names**, **Exact Dosages** (mg/kg), **Frequency**, and **Duration** (days).
-   - If weight bands are provided in the context (e.g., 3-6kg, 10-15kg), YOU MUST INCLUDE THEM in the list.
+   - If weight bands are provided (e.g., 3-6kg, 10-15kg), YOU MUST INCLUDE THEM.
 
 3. **COLOR CODING RULES:**
-   - Use these colors for the treatment lines:
-   - :green[**🟢 First Choice:** Drug Name, Dosage, Duration]
-   - :orange[**🟡 Second Choice:** Drug Name, Dosage, Duration]
-   - :red[**🔴 Reserve:** Drug Name, Dosage, Duration]
+   - :green[**🟢 First Choice:** Drug Name, Dosage...]
+   - :orange[**🟡 Second Choice:** Drug Name, Dosage...]
+   - :red[**🔴 Reserve:** Drug Name, Dosage...]
 
 4. **CITATION:** Cite the page number for every section (e.g., [Page 45]).
 
@@ -186,8 +167,6 @@ QUESTION:
 """
 
 prompt = ChatPromptTemplate.from_template(template)
-
-# Use GPT-4o for best multi-lingual performance
 llm = ChatOpenAI(model="gpt-4o", temperature=0.1, openai_api_key=api_key)
 
 def format_docs(docs):
@@ -207,34 +186,57 @@ if user_input := st.chat_input("Ex: What is the treatment for pneumonia?"):
     with st.chat_message("assistant", avatar="🩺"):
         with st.spinner(f"Consulting guidelines ({selected_language})..."):
             try:
-                # 1. Retrieve
+                # 1. Retrieve Context
                 relevant_docs = retriever.invoke(user_input)
                 formatted_context = format_docs(relevant_docs)
+
+                # 2. Determine Logic Instruction dynamically
+                # African languages -> Think in English first, then translate.
+                AFRICAN_LANGUAGES = ["Amharic (አማርኛ)", "Swahili (Kiswahili)", "Oromo (Afaan Oromoo)"]
                 
-                # 2. Build Chain (Passing the dynamic 'logic_instruction' via the prompt template)
+                if selected_language in AFRICAN_LANGUAGES:
+                    current_logic = """
+                    **CRITICAL:** First, think internally in English to get the medical facts 100% correct.
+                    Then, translate the final output accurately into **{language}**.
+                    Output ONLY the final translated response.
+                    """
+                else:
+                    current_logic = """
+                    **CRITICAL:** Answer directly and fluently in **{language}**.
+                    """
+
+                # 3. Build Chain 
+                # We pass 'logic_instruction' dynamically into the dictionary
                 rag_chain = (
                     {
                         "context": lambda x: formatted_context, 
                         "question": itemgetter("question"), 
                         "language": itemgetter("language"),
-                        "logic_instruction": lambda x: logic_instruction # Pass the logic logic
+                        "logic_instruction": itemgetter("logic_instruction") # <--- FIXED: Fetches from input dict
                     }
                     | prompt 
                     | llm 
                     | StrOutputParser()
                 )
                 
-                # 3. Stream
+                # 4. Stream Response
                 response_container = st.empty()
                 full_response = ""
                 
-                for chunk in rag_chain.stream({"question": user_input, "language": selected_language}):
+                # We pass the calculated logic explicitly here
+                input_dict = {
+                    "question": user_input, 
+                    "language": selected_language,
+                    "logic_instruction": current_logic
+                }
+
+                for chunk in rag_chain.stream(input_dict):
                     full_response += chunk
                     response_container.markdown(full_response + "▌")
                 
                 response_container.markdown(full_response)
                 
-                # 4. Evidence
+                # 5. Evidence
                 with st.expander("🔍 View Clinical Evidence (Source Text)"):
                     for i, doc in enumerate(relevant_docs):
                         st.markdown(f"**Source {i+1} (Page {doc.metadata.get('page', '?')})**")
