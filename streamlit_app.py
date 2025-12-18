@@ -116,7 +116,7 @@ with st.sidebar:
             "Arabic (العربية)",
             "Portuguese (Português)"
         ],
-        key="language_selector"  # Added key to ensure state stability
+        key="language_selector"
     )
     st.divider()
     
@@ -139,35 +139,37 @@ with st.spinner("Initializing medical knowledge base..."):
         st.error(f"Initialization Failed: {e}")
         st.stop()
 
-# --- 7. ROBUST PROMPT ENGINEERING ---
+# --- 7. DYNAMIC PROMPT LOGIC ---
 
 template = """You are PrescribeWise, an expert medical assistant based on the WHO AWaRe Antibiotic Book.
-
-INSTRUCTIONS:
-1. **LANGUAGE ENFORCEMENT:** You have been instructed to answer in **{language}**.
-   - {logic_instruction}
-   - (IGNORE any previous conversation language. Answer ONLY in {language}).
-
-2. **DETAIL LEVEL: HIGH.** - Provide a comprehensive answer. Do not summarize.
-   - Explicitly list: **Drug Names**, **Exact Dosages** (mg/kg), **Frequency**, and **Duration** (days).
-   - If weight bands are provided (e.g., 3-6kg, 10-15kg), YOU MUST INCLUDE THEM.
-
-3. **COLOR CODING RULES:**
-   - :green[**🟢 First Choice:** Drug Name, Dosage...]
-   - :orange[**🟡 Second Choice:** Drug Name, Dosage...]
-   - :red[**🔴 Reserve:** Drug Name, Dosage...]
-
-4. **CITATION:** Cite the page number for every section (e.g., [Page 45]).
 
 CONTEXT:
 {context}
 
 QUESTION:
 {question}
+
+TARGET LANGUAGE: {language}
+
+INSTRUCTIONS:
+1. {logic_instruction}
+
+2. **DETAIL LEVEL: HIGH.** - Explicitly list: **Drug Names**, **Exact Dosages** (mg/kg), **Frequency**, and **Duration**.
+   - If weight bands (e.g., 3-6kg) are in the context, YOU MUST INCLUDE THEM.
+
+3. **COLOR CODING (Must be preserved in output):**
+   - :green[**🟢 First Choice / ...**]
+   - :orange[**🟡 Second Choice / ...**]
+   - :red[**🔴 Reserve / ...**]
+
+4. **CITATION:** Cite [Page X] at the end of sections.
 """
 
 prompt = ChatPromptTemplate.from_template(template)
-llm = ChatOpenAI(model="gpt-4o", temperature=0.1, openai_api_key=api_key)
+
+# Use GPT-4o. It is ESSENTIAL for Amharic. 
+# Temperature 0.2 helps prevent the repetition loop ("dry dry dry...").
+llm = ChatOpenAI(model="gpt-4o", temperature=0.2, openai_api_key=api_key)
 
 def format_docs(docs):
     return "\n\n".join(f"[Page {doc.metadata.get('page', '?')}] {doc.page_content}" for doc in docs)
@@ -190,29 +192,37 @@ if user_input := st.chat_input("Ex: What is the treatment for pneumonia?"):
                 relevant_docs = retriever.invoke(user_input)
                 formatted_context = format_docs(relevant_docs)
 
-                # 2. Determine Logic Instruction dynamically
-                # African languages -> Think in English first, then translate.
-                AFRICAN_LANGUAGES = ["Amharic (አማርኛ)", "Swahili (Kiswahili)", "Oromo (Afaan Oromoo)"]
+                # 2. Determine Logic based on Language
                 
-                if selected_language in AFRICAN_LANGUAGES:
+                # LIST OF LANGUAGES THAT NEED "ENGLISH THOUGHT" FIRST
+                TRANSLATION_MODE_LANGUAGES = ["Amharic (አማርኛ)", "Swahili (Kiswahili)", "Oromo (Afaan Oromoo)"]
+                
+                if selected_language in TRANSLATION_MODE_LANGUAGES:
+                    # LOGIC FOR AMHARIC/OROMO/SWAHILI
+                    # We strictly forbid repetition to fix the "ye dereqe..." loop.
                     current_logic = """
-                    **CRITICAL:** First, think internally in English to get the medical facts 100% correct.
-                    Then, translate the final output accurately into **{language}**.
-                    Output ONLY the final translated response.
+                    **STRATEGY: THINK ENGLISH -> TRANSLATE**
+                    1. Draft the full answer internally in English first to ensure medical accuracy.
+                    2. Translate the answer to {language}.
+                    3. **CRITICAL FOR AMHARIC/OROMO:** Keep sentences short. Do NOT repeat words. Do not get stuck in a loop.
+                    4. Output ONLY the final translated response.
                     """
                 else:
+                    # LOGIC FOR ENGLISH, FRENCH, SPANISH, ARABIC
+                    # Direct generation is faster and accurate for these.
                     current_logic = """
-                    **CRITICAL:** Answer directly and fluently in **{language}**.
+                    **STRATEGY: DIRECT ANSWER**
+                    1. Answer directly and fluently in {language}.
+                    2. Do not translate from English; think directly in {language}.
                     """
 
-                # 3. Build Chain 
-                # We pass 'logic_instruction' dynamically into the dictionary
+                # 3. Build Chain
                 rag_chain = (
                     {
                         "context": lambda x: formatted_context, 
                         "question": itemgetter("question"), 
                         "language": itemgetter("language"),
-                        "logic_instruction": itemgetter("logic_instruction") # <--- FIXED: Fetches from input dict
+                        "logic_instruction": itemgetter("logic_instruction")
                     }
                     | prompt 
                     | llm 
@@ -223,7 +233,7 @@ if user_input := st.chat_input("Ex: What is the treatment for pneumonia?"):
                 response_container = st.empty()
                 full_response = ""
                 
-                # We pass the calculated logic explicitly here
+                # Create input dictionary
                 input_dict = {
                     "question": user_input, 
                     "language": selected_language,
