@@ -104,7 +104,6 @@ with st.sidebar:
     st.divider()
 
     st.markdown("### 🌐 Language / ቋንቋ")
-    # Added "native" names to help the AI understand context better
     selected_language = st.selectbox(
         "Choose response language:",
         [
@@ -114,7 +113,8 @@ with st.sidebar:
             "Oromo (Afaan Oromoo)", 
             "French (Français)", 
             "Spanish (Español)", 
-            "Arabic (العربية)"
+            "Arabic (العربية)",
+            "Portuguese (Português)"
         ]
     )
     st.divider()
@@ -138,23 +138,45 @@ with st.spinner("Initializing medical knowledge base..."):
         st.error(f"Initialization Failed: {e}")
         st.stop()
 
-# --- 7. IMPROVED PROMPT FOR TRANSLATION ---
-# Major Change: We explicitly tell the AI to draft in English first to ensure accuracy, then translate.
+# --- 7. DYNAMIC PROMPT LOGIC ---
+
+# Step 1: Define which languages need "Chain of Thought" (English -> Translation)
+# African languages often perform better if the AI thinks in English first.
+AFRICAN_LANGUAGES = ["Amharic (አማርኛ)", "Swahili (Kiswahili)", "Oromo (Afaan Oromoo)"]
+
+# Step 2: Determine the instruction based on selection
+if selected_language in AFRICAN_LANGUAGES:
+    # STRATEGY: Think in English -> Output in Target Language
+    logic_instruction = """
+    **CRITICAL TRANSLATION STRATEGY:**
+    1. First, formulate the FULL, DETAILED medical answer internally in **English** to ensure medical accuracy.
+    2. Then, translate that detailed English answer accurately into **{language}**.
+    3. Output **ONLY** the final translated response (do not show the English thought process).
+    """
+else:
+    # STRATEGY: Direct Generation (Better for French, Spanish, English)
+    logic_instruction = """
+    **STRATEGY:**
+    1. Answer directly and fluently in **{language}**.
+    """
+
+# Step 3: Build the Prompt
 template = """You are PrescribeWise, an expert medical assistant based on the WHO AWaRe Antibiotic Book.
 
 INSTRUCTIONS:
-1. **Understand Context:** Read the provided context carefully.
-2. **Formulate Answer:** First, formulate the correct medical answer in English to ensure accuracy.
-3. **Translate:** Then, translate the final answer naturally into **{language}**.
-   - Ensure the grammar is correct for {language}.
-   - Do NOT repeat sentences or words in a loop.
-   - If a specific medical term (like 'Amoxicillin') has no direct translation, keep it in English or use the widely accepted local medical term.
-4. **Formatting:** Apply these Streamlit colors to the final translated text:
-   - First Choice / Access: :green[**🟢 First Choice:** ...]
-   - Second Choice / Watch: :orange[**🟡 Second Choice:** ...]
-   - Reserve: :red[**🔴 Reserve:** ...]
-5. **Citation:** Include [Page X] citations at the end.
-6. **Unknown Info:** If the answer is not in the context, say "I cannot find this in the guidelines" (translated).
+1. {logic_instruction}
+
+2. **DETAIL LEVEL: HIGH.** - You must provide a comprehensive answer. Do not summarize.
+   - Explicitly list: **Drug Names**, **Exact Dosages** (mg/kg), **Frequency**, and **Duration** (days).
+   - If weight bands are provided in the context (e.g., 3-6kg, 10-15kg), YOU MUST INCLUDE THEM in the list.
+
+3. **COLOR CODING RULES:**
+   - Use these colors for the treatment lines:
+   - :green[**🟢 First Choice:** Drug Name, Dosage, Duration]
+   - :orange[**🟡 Second Choice:** Drug Name, Dosage, Duration]
+   - :red[**🔴 Reserve:** Drug Name, Dosage, Duration]
+
+4. **CITATION:** Cite the page number for every section (e.g., [Page 45]).
 
 CONTEXT:
 {context}
@@ -165,8 +187,7 @@ QUESTION:
 
 prompt = ChatPromptTemplate.from_template(template)
 
-# CRITICAL CHANGE: Switched to 'gpt-4o' (Omni)
-# GPT-4o is significantly better at Amharic/Oromo than GPT-4
+# Use GPT-4o for best multi-lingual performance
 llm = ChatOpenAI(model="gpt-4o", temperature=0.1, openai_api_key=api_key)
 
 def format_docs(docs):
@@ -190,12 +211,13 @@ if user_input := st.chat_input("Ex: What is the treatment for pneumonia?"):
                 relevant_docs = retriever.invoke(user_input)
                 formatted_context = format_docs(relevant_docs)
                 
-                # 2. Chain
+                # 2. Build Chain (Passing the dynamic 'logic_instruction' via the prompt template)
                 rag_chain = (
                     {
                         "context": lambda x: formatted_context, 
                         "question": itemgetter("question"), 
-                        "language": itemgetter("language")
+                        "language": itemgetter("language"),
+                        "logic_instruction": lambda x: logic_instruction # Pass the logic logic
                     }
                     | prompt 
                     | llm 
